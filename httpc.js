@@ -2,6 +2,9 @@
 
 const net   = require('net');
 const yargs = require('yargs');
+const http = require('http');
+const url = require('url');
+const fs = require('fs');
 
 const DEFAULT_PORT = 80;
 
@@ -19,14 +22,15 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
                 type: 'string',
                 describe: 'set headers values for request'
             },
-            url: {
+            URL: {
+                alias: 'url',
                 describe: 'The URL for the request',
                 type: 'string'
             }
         }
     )
     // POST
-    .command('post [-v] [-h] [-d] [-f] <url>', 'Get executes a HTTP GET request for the given URL',
+    .command('post [-v] [-h] [-d] [-f] <URL>', 'Get executes a HTTP GET request for the given URL',
         {
             v: {
                 alias: 'verbose',
@@ -48,7 +52,8 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
                 type: 'string',
                 describe: 'Associates the content of a file to the body HTTP POST request'
             },
-            url: {
+            URL: {
+                alias: 'url',
                 describe: 'The URL for the request',
                 type: 'string'
             }
@@ -56,43 +61,70 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
     )
     .argv;
 
-    console.log(argv);
-
-    var requestType = argv._[0];
-
-    (requestType && requestType == 'get') ? getRequest(argv) : postRequest(argv);
+   sendRequest(argv);
 
 
-    function getRequest(argv){
-        if(isValideURL(argv.url)){
-            console.log(argv.url);
-        }else{
-            console.log("Invalid URL : "+ argv.ur);
-        }
-    }
+    function sendRequest(argv){
+        if(argv.URL){
+            var parsedURL = url.parse(argv.URL);
+            var options = {
+                host: parsedURL.hostname,
+                port: DEFAULT_PORT,
+                path: parsedURL.path,
+                method: argv._[0].toUpperCase(),
+            };
 
-    function postRequest(argv){
-        if(isValideURL(argv.url)){
-            console.log(argv.url);
-        }else{
-            console.log("Invalid URL : "+ argv.ur);
-        }
-    }
+            setHeaders(options, argv.h);
 
-    function isValideURL(url){
-        return /http:\/\/\w+\.\w*/.test(url);
-    }
-
-    function getURLArguments(url){
-        var args = [];
-        if(/?/.test(url)){
-            url.match("?+").substr(1).split("&").forEach(value => {
-                var keyValue = value.split('=');
-                args.push({
-                    keyValue[0] : keyValue[1]
+            var req = http.request(options, (res) => {
+                if(argv.verbose){
+                    console.log('\nHTTP/'+ res.httpVersion + ' ' + res.statusCode + ' ' + res.statusMessage);
+                    console.log(`HEADERS: ${JSON.stringify(res.headers , null, ' ')}`);
+                }
+                res.setEncoding('utf8');
+                res.on('data', (chunk) => {
+                    console.log(`BODY: ${chunk}`);
                 });
-            })
+            });
+
+            req.on('error', (e) => {
+                console.log(`problem with request: ${e.message}`);
+            });
+            if(argv._[0] === 'post'){
+                var postData = getPostData(argv);
+                req.write(postData);
+            }
+
+            req.end();
+        }else{
+            console.log("Invalid URL : "+ argv.url);
         }
-        return args;
+    }
+
+    function getPostData(argv){
+        if(argv.d && !argv.f){
+            return argv.d;
+        }else if(argv.f && !argv.d){
+            var fileData = fs.readFileSync(argv.f);
+            return fileData.toString();
+        }else{
+            console.log("There is a problem with the data provided");
+            process.exit();
+        }
+    }
+
+    function setHeaders(options, header) {
+        if(!options.headers) options.headers = {};
+        if(header){
+            if(typeof header == 'string'){
+                var headerItems = header.split(":");
+                options.headers[headerItems[0]] = headerItems[1]; 
+            }else{
+                argv.h.forEach(function(value) {
+                    var headerItems = value.split(":");
+                    options.headers[headerItems[0]] = headerItems[1]; 
+                });
+            }
+        }
     }
 
