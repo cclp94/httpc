@@ -2,15 +2,14 @@
 
 const net   = require('net');
 const yargs = require('yargs');
-const http = require('http');
 const url = require('url');
 const fs = require('fs');
 
 const DEFAULT_PORT = 80;
 
-const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-data] [-f file] URL')
+const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-data] [-f file] URL [-o save reply to file]')
     // GET
-    .command('get [-v] [-h] <URL>', 'Get executes a HTTP GET request for the given URL',
+    .command('get [-v] [-h] <URL> [-o]', 'Get executes a HTTP GET request for the given URL',
         {
             v: {
                 alias: 'verbose',
@@ -26,11 +25,15 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
                 alias: 'url',
                 describe: 'The URL for the request',
                 type: 'string'
+            },
+            o: {
+                describe: 'Save Reply message to File',
+                type: 'string'
             }
         }
     )
     // POST
-    .command('post [-v] [-h] [-d] [-f] <URL>', 'Get executes a HTTP GET request for the given URL',
+    .command('post [-v] [-h] [-d] [-f] <URL> [-o]', 'Get executes a HTTP GET request for the given URL',
         {
             v: {
                 alias: 'verbose',
@@ -56,50 +59,64 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
                 alias: 'url',
                 describe: 'The URL for the request',
                 type: 'string'
+            },
+            o: {
+                describe: 'Save Reply message to File',
+                type: 'string'
             }
         }
     )
     .argv;
 
-   sendRequest(argv);
+    var parsedURL = url.parse(argv.URL);
 
+    const client = net.createConnection({host: parsedURL.host, port: DEFAULT_PORT});
 
-    function sendRequest(argv){
-        if(argv.URL){
-            var parsedURL = url.parse(argv.URL);
+    client.on('connect', () => {
+         if(argv.URL){
+
             var options = {
                 host: parsedURL.hostname,
                 port: DEFAULT_PORT,
                 path: parsedURL.path,
                 method: argv._[0].toUpperCase(),
+                headers: argv.h
             };
 
             setHeaders(options, argv.h);
-
-            var req = http.request(options, (res) => {
-                if(argv.verbose){
-                    console.log('\nHTTP/'+ res.httpVersion + ' ' + res.statusCode + ' ' + res.statusMessage);
-                    console.log(`HEADERS: ${JSON.stringify(res.headers , null, ' ')}`);
-                }
-                res.setEncoding('utf8');
-                res.on('data', (chunk) => {
-                    console.log(`BODY: ${chunk}`);
-                });
-            });
-
-            req.on('error', (e) => {
-                console.log(`problem with request: ${e.message}`);
-            });
             if(argv._[0] === 'post'){
                 var postData = getPostData(argv);
-                req.write(postData);
+                options.body = postData;
             }
 
-            req.end();
+             client.write(options.method + ' ' + options.path + ' ' + 'HTTP/1.1\r\n'+
+            'Host: '+ options.host+'\r\n'+
+            'Port: '+options.port+'\r\n'+
+            ((options.headers) ? options.headers +'\r\n': '' )+
+            ((options.body && !options.headers.includes('Content-Length') )? 'Content-Length: ' + options.body.length +'\r\n': '')+ 
+            '\r\n'+
+            (options.body ? options.body +'\r\n\r\n': '\r\n') );
+         }
+    });
+
+
+    client.on('data', res => {
+        var ParsedResponse = res.toString().split('\r\n\r\n');
+        if(argv.o){
+            fs.writeFileSync(argv.o, ParsedResponse[1]);
         }else{
-            console.log("Invalid URL : "+ argv.url);
+            if(argv.verbose){
+                console.log(ParsedResponse[0]);
+            }
+            console.log('\n'+ParsedResponse[1]);
         }
-    }
+        client.end();
+    });
+
+    client.on('error', err => {
+    console.log('socket error %j', err);
+    process.exit(-1);
+    });
 
     function getPostData(argv){
         if(argv.d && !argv.f){
@@ -113,18 +130,14 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
         }
     }
 
-    function setHeaders(options, header) {
-        if(!options.headers) options.headers = {};
-        if(header){
-            if(typeof header == 'string'){
-                var headerItems = header.split(":");
-                options.headers[headerItems[0]] = headerItems[1]; 
-            }else{
-                argv.h.forEach(function(value) {
-                    var headerItems = value.split(":");
-                    options.headers[headerItems[0]] = headerItems[1]; 
-                });
-            }
-        }
-    }
+     function setHeaders(options, header) {
+         if(!options.headers) options.headers = '';
+         if(header){
+             if(typeof header == 'string'){
+                 options.headers = header;
+             }else{
+                 options.headers = header.join('\r\n');
+             }
+         }
+     }
 
