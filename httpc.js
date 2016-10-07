@@ -7,6 +7,7 @@ const fs = require('fs');
 
 const DEFAULT_PORT = 80;
 
+// Command Line Usage
 const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-data] [-f file] URL [-o save reply to file]')
     // GET
     .command('get [-v] [-h] <URL> [-o]', 'Get executes a HTTP GET request for the given URL',
@@ -69,54 +70,75 @@ const argv = yargs.usage('Usage: node $0 (get|post) [-v] (-h "k:v")* [-d inline-
     .argv;
 
     var parsedURL = url.parse(argv.URL);
+    makeRequest(parsedURL);
 
-    const client = net.createConnection({host: parsedURL.host, port: DEFAULT_PORT});
+    function makeRequest(parsedURL){
+        const client = net.createConnection({host: parsedURL.host, port: DEFAULT_PORT});
+        client.on('connect', () => {
+            if(argv.URL){
 
-    client.on('connect', () => {
-         if(argv.URL){
+                var options = {
+                    host: parsedURL.hostname,
+                    port: DEFAULT_PORT,
+                    path: parsedURL.path,
+                    method: argv._[0].toUpperCase()
+                };
 
-            var options = {
-                host: parsedURL.hostname,
-                port: DEFAULT_PORT,
-                path: parsedURL.path,
-                method: argv._[0].toUpperCase(),
-                headers: argv.h
-            };
+                setHeaders(options, argv.h);
+                if(argv._[0] === 'post'){
+                    var postData = getPostData(argv);
+                    options.body = postData;
+                }
 
-            setHeaders(options, argv.h);
-            if(argv._[0] === 'post'){
-                var postData = getPostData(argv);
-                options.body = postData;
+                client.write(
+                    options.method + ' ' + options.path + ' ' + 'HTTP/1.1\r\n'+
+                    'Host: '+ options.host+'\r\n'+
+                    'Port: '+options.port+'\r\n'+
+                    ((options.headers) ? options.headers +'\r\n': '' )+
+                    ((options.body && !options.headers.includes('Content-Length') )? 'Content-Length: ' + options.body.length +'\r\n': '')+ 
+                    '\r\n'+
+                    (options.body ? options.body +'\r\n\r\n': '\r\n') 
+                );
             }
-
-             client.write(options.method + ' ' + options.path + ' ' + 'HTTP/1.1\r\n'+
-            'Host: '+ options.host+'\r\n'+
-            'Port: '+options.port+'\r\n'+
-            ((options.headers) ? options.headers +'\r\n': '' )+
-            ((options.body && !options.headers.includes('Content-Length') )? 'Content-Length: ' + options.body.length +'\r\n': '')+ 
-            '\r\n'+
-            (options.body ? options.body +'\r\n\r\n': '\r\n') );
-         }
-    });
+        });
 
 
-    client.on('data', res => {
-        var ParsedResponse = res.toString().split('\r\n\r\n');
-        if(argv.o){
-            fs.writeFileSync(argv.o, ParsedResponse[1]);
-        }else{
-            if(argv.verbose){
-                console.log(ParsedResponse[0]);
+        client.on('data', res => {
+            var ParsedResponse = res.toString().split('\r\n\r\n');
+            // Check status code for redirects 3XX
+            if(ParsedResponse[0].search(/HTTP\/1\.\d 3\d\d \w+\s?\w*\r\n/) != -1){
+                // Redirect works for absolute and relative redirections
+                if(argv.verbose){
+                    console.log(ParsedResponse[0]);
+                    console.log("\n");
+                    console.log("REDIRECT\n");
+                }
+                var location = ParsedResponse[0].match(/Location: .+(?!\n)/)[0];
+                if(location){
+                    location = (location.match(/\s.+/)[0]);
+                    location = location.substring(1, location.length);
+                }
+                var redirectURL = url.parse((location.includes("http")? location : 'http://'+parsedURL.host+location));
+                client.end();
+                makeRequest(redirectURL);
+            }else{
+                if(argv.o){
+                    fs.writeFileSync(argv.o, ParsedResponse[1]);
+                }else{
+                    if(argv.verbose){
+                        console.log(ParsedResponse[0]);
+                    }
+                    console.log('\n'+ParsedResponse[1]);
+                }
+                client.end();
             }
-            console.log('\n'+ParsedResponse[1]);
-        }
-        client.end();
-    });
+        });
 
-    client.on('error', err => {
-    console.log('socket error %j', err);
-    process.exit(-1);
-    });
+        client.on('error', err => {
+        console.log('socket error %j', err);
+        process.exit(-1);
+        });
+    }
 
     function getPostData(argv){
         if(argv.d && !argv.f){
